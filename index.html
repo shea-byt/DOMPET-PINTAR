@@ -493,15 +493,10 @@ function autoSync(newTxs){
     note: t.note||'',
     id: t.id
   }));
-  const payload = JSON.stringify({rows, month: monthName});
-  // Pakai no-cors agar tidak diblok browser, data tetap terkirim ke Apps Script
-  fetch(scriptUrl, {
-    method:'POST',
-    body: payload,
-    mode: 'no-cors',
-    headers:{'Content-Type':'text/plain'}
-  }).then(()=>{
-    // no-cors = response opaque, anggap sukses jika tidak error
+  const payload = encodeURIComponent(JSON.stringify({rows, month: monthName}));
+  const url = scriptUrl + '?data=' + payload;
+  fetch(url, {mode:'no-cors'})
+  .then(()=>{
     newTxs.forEach(nt=>{
       const idx = txs.findIndex(t=>t.id===nt.id);
       if(idx>=0) txs[idx].synced=true;
