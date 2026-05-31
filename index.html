@@ -323,4 +323,201 @@ if(scriptUrl){
 }
 
 const now = new Date();
-document.getElementById('headerMonth')
+document.getElementById('headerMonth').textContent = now.toLocaleDateString('id-ID',{month:'long',year:'numeric'});
+
+function fmt(n){
+  return 'Rp ' + Math.abs(Math.round(n)).toLocaleString('id-ID');
+}
+
+function updateHeader(){
+  const m = now.getMonth(), y = now.getFullYear();
+  let inc=0, exp=0;
+  txs.forEach(t=>{
+    const d = new Date(t.date);
+    if(d.getMonth()===m && d.getFullYear()===y){
+      if(t.type==='income') inc+=t.amount; else exp+=t.amount;
+    }
+  });
+  const bal = inc - exp;
+  const el = document.getElementById('balanceAmt');
+  el.textContent = (bal<0?'-':'') + fmt(bal);
+  el.className = 'balance-amount' + (bal<0?' negative':'');
+  document.getElementById('hdrIncome').textContent = fmt(inc);
+  document.getElementById('hdrExpense').textContent = fmt(exp);
+}
+
+function txRow(t){
+  const cats={'🍜 Makanan & Minuman':'🍜','🚗 Transportasi':'🚗','🛍️ Belanja':'🛍️','💡 Tagihan & Utilitas':'💡','🎮 Hiburan':'🎮','🏥 Kesehatan':'🏥','📚 Pendidikan':'📚','🏠 Rumah':'🏠','📦 Lainnya':'📦','💼 Gaji / Freelance':'💼','📈 Investasi':'📈','🎁 Hadiah / Bonus':'🎁','💰 Lainnya (Masuk)':'💰'};
+  const em = cats[t.cat]||'💸';
+  return `<div class="tx-item">
+    <div class="tx-icon ${t.type}">${em}</div>
+    <div class="tx-body">
+      <div class="tx-name">${t.desc}</div>
+      <div class="tx-sub">${t.cat||'—'} · ${new Date(t.date).toLocaleDateString('id-ID',{day:'numeric',month:'short'})}</div>
+    </div>
+    <div class="tx-right">
+      <div class="tx-amount ${t.type}">${t.type==='income'?'+':'-'}${fmt(t.amount)}</div>
+      <div class="tx-sync ${t.synced?'ok':'no'}">${t.synced?'✓ synced':'● pending'}</div>
+    </div>
+  </div>`;
+}
+
+function renderRecent(){
+  const el = document.getElementById('recentList');
+  const recent = txs.slice(0,8);
+  if(!recent.length){
+    el.innerHTML=`<div class="empty-state"><div class="empty-icon">💰</div><div class="empty-text">Belum ada transaksi</div><div class="empty-sub">Tap + untuk mulai mencatat</div></div>`;
+    return;
+  }
+  el.innerHTML = recent.map(t=>txRow(t)).join('');
+}
+
+function renderHistory(){
+  const el = document.getElementById('historyList');
+  let list = txs;
+  if(filterMode==='income') list = txs.filter(t=>t.type==='income');
+  if(filterMode==='expense') list = txs.filter(t=>t.type==='expense');
+  if(!list.length){el.innerHTML=`<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-text">Tidak ada transaksi</div></div>`;return;}
+  el.innerHTML = list.map(t=>txRow(t)).join('');
+}
+
+function renderSync(){
+  const pending = txs.filter(t=>!t.synced);
+  document.getElementById('statTotal').textContent = txs.length;
+  document.getElementById('statPending').textContent = pending.length;
+  document.getElementById('statLast').textContent = lastSync||'—';
+}
+
+function setType(t){
+  currentType = t;
+  document.getElementById('btnI').className = 'type-btn'+(t==='income'?' active-income':'');
+  document.getElementById('btnE').className = 'type-btn'+(t==='expense'?' active-expense':'');
+  const btn = document.getElementById('submitBtn');
+  btn.className = 'submit-btn '+t;
+  btn.textContent = '+ Tambah '+(t==='income'?'Pemasukan':'Pengeluaran');
+}
+
+function addTx(){
+  const amt = parseFloat(document.getElementById('fAmt').value);
+  const desc = document.getElementById('fDesc').value.trim();
+  const cat = document.getElementById('fCat').value;
+  const date = document.getElementById('fDate').value;
+  const note = document.getElementById('fNote').value.trim();
+  if(!amt||amt<=0){toast('Masukkan jumlah yang valid ⚠️');return}
+  if(!desc){toast('Masukkan keterangan ⚠️');return}
+  if(!cat){toast('Pilih kategori ⚠️');return}
+  const tx = {id:Date.now(),type:currentType,amount:amt,desc,cat,date,note,synced:false};
+  txs.unshift(tx);
+  save();
+  document.getElementById('fAmt').value='';
+  document.getElementById('fDesc').value='';
+  document.getElementById('fNote').value='';
+  document.getElementById('fCat').value='';
+  toast((currentType==='income'?'Pemasukan':'Pengeluaran')+' dicatat ✓');
+  // Auto sync if script URL set
+  if(scriptUrl) autoSync([tx]);
+  goTab('home');
+}
+
+function autoSync(newTxs){
+  const monthName = now.toLocaleDateString('id-ID',{month:'long',year:'numeric'});
+  const rows = newTxs.map(t=>({
+    date: t.date,
+    type: t.type==='income'?'Pemasukan':'Pengeluaran',
+    desc: t.desc,
+    cat: t.cat,
+    amount: t.amount,
+    note: t.note||'',
+    id: t.id
+  }));
+  fetch(scriptUrl, {
+    method:'POST',
+    body: JSON.stringify({rows, month: monthName}),
+    headers:{'Content-Type':'text/plain'}
+  }).then(r=>r.json()).then(d=>{
+    if(d.success){
+      newTxs.forEach(nt=>{
+        const idx = txs.findIndex(t=>t.id===nt.id);
+        if(idx>=0) txs[idx].synced=true;
+      });
+      lastSync = new Date().toLocaleString('id-ID');
+      localStorage.setItem('dp_lastsync',lastSync);
+      save();
+      toast('✓ Tersimpan di Google Sheets');
+    }
+  }).catch(()=>{
+    toast('Sync gagal, cek koneksi');
+  });
+}
+
+function doSync(){
+  if(!scriptUrl){toast('Setup script URL dulu di tab Sinkron ⚠️');return}
+  const pending = txs.filter(t=>!t.synced);
+  if(!pending.length){toast('Semua sudah tersinkron ✓');return}
+  const btn = document.getElementById('syncBtn');
+  btn.disabled=true;
+  btn.textContent='Menyinkron...';
+  autoSync(pending);
+  setTimeout(()=>{btn.disabled=false;btn.innerHTML='↻ Sinkron Sekarang ke Google Sheets';renderSync();},3000);
+}
+
+function copyScript(){
+  if(navigator.clipboard){
+    navigator.clipboard.writeText(APPS_SCRIPT).then(()=>toast('Script disalin ✓'));
+  } else {
+    const ta=document.createElement('textarea');
+    ta.value=APPS_SCRIPT;
+    document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+    toast('Script disalin ✓');
+  }
+}
+
+function saveScriptUrl(){
+  const url = document.getElementById('scriptUrl').value.trim();
+  if(!url||!url.includes('script.google.com')){toast('URL Apps Script tidak valid ⚠️');return}
+  scriptUrl=url;
+  localStorage.setItem('dp_scripturl',url);
+  document.getElementById('connectionBadge').className='status-badge connected';
+  document.getElementById('connectionBadge').textContent='● Terhubung';
+  toast('URL disimpan, auto sync aktif ✓');
+}
+
+function setFilter(f,el){
+  filterMode=f;
+  document.querySelectorAll('.filter-chip').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+  renderHistory();
+}
+
+function save(){
+  localStorage.setItem('dp_txs',JSON.stringify(txs));
+  updateHeader();
+  renderRecent();
+}
+
+function toast(msg){
+  const el=document.getElementById('toast');
+  el.textContent=msg;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t=setTimeout(()=>el.classList.remove('show'),2500);
+}
+
+function goTab(tab){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('panel-'+tab).classList.add('active');
+  document.getElementById('nav-'+tab).classList.add('active');
+  if(tab==='history') renderHistory();
+  if(tab==='sync') renderSync();
+}
+
+updateHeader();
+renderRecent();
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}
+</script>
+</body>
+</html>
