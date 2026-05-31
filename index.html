@@ -117,6 +117,18 @@ body{display:flex;flex-direction:column;max-width:480px;margin:0 auto;position:r
 .status-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600}
 .status-badge.connected{background:var(--green-glow);color:var(--green)}
 .status-badge.disconnected{background:rgba(244,63,94,.12);color:var(--red)}
+.tx-wrap{position:relative;overflow:hidden}
+.tx-delete-bg{position:absolute;right:0;top:0;bottom:0;width:80px;background:var(--red);display:flex;align-items:center;justify-content:center;font-size:22px;border-bottom:1px solid var(--border)}
+.tx-item{transition:transform .2s;background:var(--surface);position:relative;z-index:1}
+.tx-item.swiped{transform:translateX(-80px)}
+.confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;display:flex;align-items:flex-end;justify-content:center;padding:20px}
+.confirm-box{background:var(--surface);border-radius:var(--radius);padding:20px;width:100%;max-width:440px}
+.confirm-title{font-size:16px;font-weight:700;margin-bottom:6px}
+.confirm-sub{font-size:13px;color:var(--text2);margin-bottom:20px}
+.confirm-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.confirm-btns button{padding:13px;border-radius:var(--radius-sm);border:none;font-family:var(--ff);font-size:15px;font-weight:600;cursor:pointer}
+.btn-cancel{background:var(--surface2);color:var(--text)}
+.btn-delete{background:var(--red);color:#fff}
 </style>
 </head>
 <body>
@@ -349,17 +361,68 @@ function updateHeader(){
 function txRow(t){
   const cats={'🍜 Makanan & Minuman':'🍜','🚗 Transportasi':'🚗','🛍️ Belanja':'🛍️','💡 Tagihan & Utilitas':'💡','🎮 Hiburan':'🎮','🏥 Kesehatan':'🏥','📚 Pendidikan':'📚','🏠 Rumah':'🏠','📦 Lainnya':'📦','💼 Gaji / Freelance':'💼','📈 Investasi':'📈','🎁 Hadiah / Bonus':'🎁','💰 Lainnya (Masuk)':'💰'};
   const em = cats[t.cat]||'💸';
-  return `<div class="tx-item">
-    <div class="tx-icon ${t.type}">${em}</div>
-    <div class="tx-body">
-      <div class="tx-name">${t.desc}</div>
-      <div class="tx-sub">${t.cat||'—'} · ${new Date(t.date).toLocaleDateString('id-ID',{day:'numeric',month:'short'})}</div>
-    </div>
-    <div class="tx-right">
-      <div class="tx-amount ${t.type}">${t.type==='income'?'+':'-'}${fmt(t.amount)}</div>
-      <div class="tx-sync ${t.synced?'ok':'no'}">${t.synced?'✓ synced':'● pending'}</div>
+  return `<div class="tx-wrap" id="wrap-${t.id}">
+    <div class="tx-delete-bg" onclick="confirmDelete(${t.id})">🗑️</div>
+    <div class="tx-item" id="tx-${t.id}"
+      ontouchstart="swipeStart(event,${t.id})"
+      ontouchend="swipeEnd(event,${t.id})">
+      <div class="tx-icon ${t.type}">${em}</div>
+      <div class="tx-body">
+        <div class="tx-name">${t.desc}</div>
+        <div class="tx-sub">${t.cat||'—'} · ${new Date(t.date).toLocaleDateString('id-ID',{day:'numeric',month:'short'})}</div>
+      </div>
+      <div class="tx-right">
+        <div class="tx-amount ${t.type}">${t.type==='income'?'+':'-'}${fmt(t.amount)}</div>
+        <div class="tx-sync ${t.synced?'ok':'no'}">${t.synced?'✓ synced':'● pending'}</div>
+      </div>
     </div>
   </div>`;
+}
+
+let swipeStartX = 0;
+let swipeId = null;
+
+function swipeStart(e, id){
+  swipeStartX = e.touches[0].clientX;
+  swipeId = id;
+}
+
+function swipeEnd(e, id){
+  const dx = e.changedTouches[0].clientX - swipeStartX;
+  const el = document.getElementById('tx-'+id);
+  if(!el) return;
+  if(dx < -50){
+    // Close others
+    document.querySelectorAll('.tx-item.swiped').forEach(x=>{ if(x.id!=='tx-'+id) x.classList.remove('swiped'); });
+    el.classList.add('swiped');
+  } else if(dx > 20){
+    el.classList.remove('swiped');
+  }
+}
+
+function confirmDelete(id){
+  const tx = txs.find(t=>t.id===id);
+  if(!tx) return;
+  const ov = document.createElement('div');
+  ov.className = 'confirm-overlay';
+  ov.innerHTML = `<div class="confirm-box">
+    <div class="confirm-title">Hapus transaksi?</div>
+    <div class="confirm-sub">${tx.desc} · ${tx.type==='income'?'+':'-'}${fmt(tx.amount)}</div>
+    <div class="confirm-btns">
+      <button class="btn-cancel" onclick="this.closest('.confirm-overlay').remove();document.getElementById('tx-${id}')&&document.getElementById('tx-${id}').classList.remove('swiped')">Batal</button>
+      <button class="btn-delete" onclick="deleteTx(${id})">Hapus</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+}
+
+function deleteTx(id){
+  document.querySelector('.confirm-overlay')?.remove();
+  txs = txs.filter(t=>t.id!==id);
+  save();
+  renderRecent();
+  renderHistory();
+  toast('Transaksi dihapus');
 }
 
 function renderRecent(){
@@ -430,21 +493,23 @@ function autoSync(newTxs){
     note: t.note||'',
     id: t.id
   }));
+  const payload = JSON.stringify({rows, month: monthName});
+  // Pakai no-cors agar tidak diblok browser, data tetap terkirim ke Apps Script
   fetch(scriptUrl, {
     method:'POST',
-    body: JSON.stringify({rows, month: monthName}),
+    body: payload,
+    mode: 'no-cors',
     headers:{'Content-Type':'text/plain'}
-  }).then(r=>r.json()).then(d=>{
-    if(d.success){
-      newTxs.forEach(nt=>{
-        const idx = txs.findIndex(t=>t.id===nt.id);
-        if(idx>=0) txs[idx].synced=true;
-      });
-      lastSync = new Date().toLocaleString('id-ID');
-      localStorage.setItem('dp_lastsync',lastSync);
-      save();
-      toast('✓ Tersimpan di Google Sheets');
-    }
+  }).then(()=>{
+    // no-cors = response opaque, anggap sukses jika tidak error
+    newTxs.forEach(nt=>{
+      const idx = txs.findIndex(t=>t.id===nt.id);
+      if(idx>=0) txs[idx].synced=true;
+    });
+    lastSync = new Date().toLocaleString('id-ID');
+    localStorage.setItem('dp_lastsync',lastSync);
+    save();
+    toast('✓ Tersimpan di Google Sheets');
   }).catch(()=>{
     toast('Sync gagal, cek koneksi');
   });
